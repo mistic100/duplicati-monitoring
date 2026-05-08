@@ -8,34 +8,14 @@ const DATA_ROOT = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 
 type Duplicati = {
   Data: {
-    SizeOfAddedFiles:number,
-    FilesWithError:number,
-    SizeOfModifiedFiles:number,
-    SizeOfExaminedFiles:number,
-    SizeOfOpenedFiles:number,
-    
-    CompactResults: {
-      UploadedFileCount:number,
-      DownloadedFileCount:number,
-      DownloadedFileSize:number,
-      UploadedFileSize:number,
-    },
-    Duration:string,
-    ParsedResult:string,
-
-    BackendStatistics: {
-      BytesUploaded:number,
-      BytesDownloaded:number,
-      FilesUploaded:number,
-      FilesDownloaded:number,
-      LastBackupDate:string,
-    }
-  },
+    ParsedResult: "Success" | "Warning" | "Error" | "Late" | "Missing";
+    Duration: string | null;
+    EndTime: string | null;
+  };
   Extra:{
-    OperationName:string,
-    "backup-name":string,
-  }
-}
+    "backup-name":string;
+  };
+};
 
 function normalizeName(name: string): string {
   return name.trim()
@@ -75,29 +55,13 @@ async function getLatestBackup(name: string): Promise<string | null> {
   }
 }
 
-function parseBackupPayload(payload: unknown): {
-    backupName: string;
-    lastBackupDate: string;
-    body: Duplicati;
-} {
-  const body = payload as Duplicati;
-  const backupName = body?.Extra?.["backup-name"];
-  const lastBackupDate = body?.Data?.BackendStatistics?.LastBackupDate;
-
-  if (typeof backupName !== "string" || typeof lastBackupDate !== "string") {
-    throw new Error("Missing backup name or LastBackupDate");
-  }
-
-  return { backupName, lastBackupDate, body };
-}
-
 const server: FastifyInstance = Fastify({ logger: true });
 
 server.post("/backup", async (request, reply) => {
   try {
-    const { backupName, lastBackupDate, body } = parseBackupPayload(request.body);
-    const safeName = normalizeName(backupName);
-    const safeDate = normalizeName(lastBackupDate);
+    const body = request.body as Duplicati;
+    const safeName = normalizeName(body.Extra["backup-name"]);
+    const safeDate = normalizeName(body.Data.EndTime!);
     const backupDir = path.join(DATA_ROOT, safeName);
 
     await fs.mkdir(backupDir, { recursive: true });
@@ -105,7 +69,7 @@ server.post("/backup", async (request, reply) => {
     await fs.writeFile(filePath, JSON.stringify(body), "utf8");
     await cleanupOldBackups(backupDir);
 
-    return reply.code(204);
+    return reply.code(200).send({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid request";
     return reply.code(400).send({ error: message });
@@ -113,7 +77,7 @@ server.post("/backup", async (request, reply) => {
 });
 
 server.get("/status", async (request, reply) => {
-  const { name } = request.query as { name?: string };
+  const { name, maxAge } = request.query as { name?: string, maxAge?: string };
 
   if (!name) {
     return reply.code(400).send({ error: "Missing name query parameter" });
@@ -122,11 +86,32 @@ server.get("/status", async (request, reply) => {
   const safeName = normalizeName(name);
   const latest = await getLatestBackup(safeName);
   if (!latest) {
-    return reply.code(404).send({ error: "No backups found for this name" });
+    return reply.code(200)
+      .header("Content-Type", "application/json")
+      .send({
+        Data: {
+          ParsedResult: "Missing",
+          Duration: null,
+          EndTime: null,
+        },
+        Extra: {
+          "backup-name": name,
+        },
+      } satisfies Duplicati);
   }
 
-  const content = await fs.readFile(latest, "utf8");
-  return reply.code(200).header("Content-Type", "application/json").send(JSON.parse(content));
+  const content = JSON.parse(await fs.readFile(latest, "utf8")) as Duplicati;
+
+  if (maxAge) {
+    const delta = Date.now() - Date.parse(content.Data.EndTime!);
+    if (delta > parseInt(maxAge) * 3600 * 1000) {
+      content.Data.ParsedResult = "Late";
+    }
+  }
+
+  return reply.code(200)
+    .header("Content-Type", "application/json")
+    .send(content);
 });
 
 (async () => {
