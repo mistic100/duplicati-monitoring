@@ -7,11 +7,12 @@ const HISTORY_SIZE = Number(process.env.HISTORY_SIZE ?? "20");
 const DATA_ROOT = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
 
 type Duplicati = {
+  Status: "Success" | "Warning" | "Error" | "Late" | "Missing";
   Data: {
-    ParsedResult: "Success" | "Warning" | "Error" | "Late" | "Missing";
-    Duration: string | null;
-    EndTime: string | null;
-  };
+    ParsedResult: "Success" | "Warning" | "Error";
+    Duration: string;
+    EndTime: string;
+  } | null;
   Extra:{
     "backup-name":string;
   };
@@ -61,7 +62,7 @@ server.post("/backup", async (request, reply) => {
   try {
     const body = request.body as Duplicati;
     const safeName = normalizeName(body.Extra["backup-name"]);
-    const safeDate = normalizeName(body.Data.EndTime!);
+    const safeDate = normalizeName(body.Data!.EndTime);
     const backupDir = path.join(DATA_ROOT, safeName);
 
     await fs.mkdir(backupDir, { recursive: true });
@@ -89,11 +90,8 @@ server.get("/status", async (request, reply) => {
     return reply.code(200)
       .header("Content-Type", "application/json")
       .send({
-        Data: {
-          ParsedResult: "Missing",
-          Duration: null,
-          EndTime: null,
-        },
+        Status: "Missing",
+        Data: null,
         Extra: {
           "backup-name": name,
         },
@@ -102,10 +100,12 @@ server.get("/status", async (request, reply) => {
 
   const content = JSON.parse(await fs.readFile(latest, "utf8")) as Duplicati;
 
+  content.Status = content.Data!.ParsedResult;
+
   if (maxAge) {
-    const delta = Date.now() - Date.parse(content.Data.EndTime!);
+    const delta = Date.now() - Date.parse(content.Data!.EndTime!);
     if (delta > parseInt(maxAge) * 3600 * 1000) {
-      content.Data.ParsedResult = "Late";
+      content.Status = "Late";
     }
   }
 
