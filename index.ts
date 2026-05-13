@@ -1,4 +1,3 @@
-import Fastify, { FastifyInstance } from "fastify";
 import fs from "fs/promises";
 import path from "path";
 
@@ -56,46 +55,41 @@ async function getLatestBackup(name: string): Promise<string | null> {
   }
 }
 
-const server: FastifyInstance = Fastify({ logger: true });
+async function handleBackupRequest(req: Request): Promise<Response> {
+  const body = await req.json() as Duplicati;
 
-server.post("/backup", async (request, reply) => {
-  try {
-    const body = request.body as Duplicati;
-    const safeName = normalizeName(body.Extra["backup-name"]);
-    const safeDate = normalizeName(body.Data!.EndTime);
-    const backupDir = path.join(DATA_ROOT, safeName);
+  const safeName = normalizeName(body.Extra["backup-name"]);
+  const safeDate = normalizeName(body.Data!.EndTime);
+  const backupDir = path.join(DATA_ROOT, safeName);
 
-    await fs.mkdir(backupDir, { recursive: true });
-    const filePath = path.join(backupDir, `${safeDate}.json`);
-    await fs.writeFile(filePath, JSON.stringify(body), "utf8");
-    await cleanupOldBackups(backupDir);
+  await fs.mkdir(backupDir, { recursive: true });
+  const filePath = path.join(backupDir, `${safeDate}.json`);
+  await fs.writeFile(filePath, JSON.stringify(body), "utf8");
+  await cleanupOldBackups(backupDir);
 
-    return reply.code(200).send({ ok: true });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Invalid request";
-    return reply.code(400).send({ error: message });
-  }
-});
+  return Response.json({ ok: true });
+}
 
-server.get("/status", async (request, reply) => {
-  const { name, maxAge } = request.query as { name?: string, maxAge?: string };
+async function handleStatusRequest(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+
+  const name = url.searchParams.get("name");
+  const maxAge = url.searchParams.get("maxAge");
 
   if (!name) {
-    return reply.code(400).send({ error: "Missing name query parameter" });
+    return Response.json({ error: "Missing name query parameter" }, 400);
   }
 
   const safeName = normalizeName(name);
   const latest = await getLatestBackup(safeName);
   if (!latest) {
-    return reply.code(200)
-      .header("Content-Type", "application/json")
-      .send({
-        Status: "Missing",
-        Data: null,
-        Extra: {
-          "backup-name": name,
-        },
-      } satisfies Duplicati);
+    return Response.json({
+      Status: "Missing",
+      Data: null,
+      Extra: {
+        "backup-name": name,
+      },
+    } satisfies Duplicati);
   }
 
   const content = JSON.parse(await fs.readFile(latest, "utf8")) as Duplicati;
@@ -103,17 +97,37 @@ server.get("/status", async (request, reply) => {
   content.Status = content.Data!.ParsedResult;
 
   if (maxAge) {
-    const delta = Date.now() - Date.parse(content.Data!.EndTime!);
-    if (delta > parseInt(maxAge) * 3600 * 1000) {
+    const delta = Date.now() - Date.parse(content.Data!.EndTime);
+    if (delta > parseInt(maxAge, 10) * 3600 * 1000) {
       content.Status = "Late";
     }
   }
 
-  return reply.code(200)
-    .header("Content-Type", "application/json")
-    .send(content);
+  return Response.json(content);
+}
+
+const server = Bun.serve({
+  port: PORT,
+  async fetch(req): Promise<Response> {
+    console.log(`${req.method} ${req.url}`);
+    
+    const url = new URL(req.url);
+
+    try {
+      if (req.method === "POST" && url.pathname === "/backup") {
+        return handleBackupRequest(req);
+      }
+
+      if (req.method === "GET" && url.pathname === "/status") {
+        return handleStatusRequest(req);
+      }
+
+      return Response.json({ error: "Not found" }, 404);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid request";
+      return Response.json({ error: message }, 400);
+    }
+  },
 });
 
-(async () => {
-  await server.listen({ port: PORT, host: "0.0.0.0" });
-})();
+console.log(`Listening on ${server.url}`);
