@@ -2,6 +2,10 @@
 
 Simple bridge to display [Duplicati](https://duplicati.com/) backups status in Home Assistant.
 
+The `/backup` endpoint is called after each backup job from Duplicati and the `/status` endpoint is called by Home Assistant REST sensor to get the backup status.
+
+Also includes a "dead-man" detection to know if a planned job didn't run at all.
+
 ## Start the bridge
 
 ```sh
@@ -9,26 +13,31 @@ bun install
 bun run index.ts
 ```
 
-## Use with Docker compose
+## (or) Use with Docker compose
 
 ```yaml
 services:
   duplicati-monitoring:
     build: ./duplicati-monitoring
     container_name: duplicati-monitoring
+    pull_policy: build
+    environment:
+     - PORT=3000
+     - HISTORY_SIZE=20
+     - DATA_DIR=/app/data
     ports:
       - '3000:3000'
     volumes:
       - ./data:/app/data
 ```
 
-## Duplicati config
+## Configure Duplicati
 
 ```
 --send-http-json-urls=http://<ip>:3000/backup
 ```
 
-## Home Assistant sensor
+## Add Home Assistant sensor
 
 ```yaml
 sensor:
@@ -45,7 +54,7 @@ Possible sensor values are "Success", "Error", "Warning" (Duplicati standard), "
 
 Then endpoint actually returns the whole Duplicati report JSON so you can add additional attributes if needed.
 
-## Home Assistant card
+## Add Home Assistant card
 
 Using [auto-entities](https://github.com/thomasloven/lovelace-auto-entities) and [Mushroom](https://github.com/piitaya/lovelace-mushroom). 
 
@@ -55,8 +64,7 @@ filter:
   include:
     - options:
         type: template
-        content: >-
-          {{ state_attr(entity, 'friendly_name') }} ({{ states(entity) }})
+        content: "{{ state_attr(entity, 'friendly_name').replace('Duplicati', '') }}"
         icon: >-
           {% if states(entity) == 'Success' %}mdi:check-all
           {% elif states(entity) == 'Error' %}mdi:alert-circle
@@ -71,6 +79,8 @@ filter:
           {% elif states(entity) == 'Missing' %}orange
           {% elif states(entity) == 'Late' %}red
           {% endif %}
+        tap_action:
+          action: more-info
       entity_id: /^sensor.duplicati_.*$/
       sort:
         method: friendly_name

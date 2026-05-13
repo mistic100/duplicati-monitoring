@@ -1,6 +1,6 @@
-import path from "path";
-import fs from "fs/promises";
 import Fastify, { FastifyInstance } from "fastify";
+import fs from "fs/promises";
+import path from "path";
 
 const PORT = Number(process.env.PORT ?? "3000");
 const HISTORY_SIZE = Number(process.env.HISTORY_SIZE ?? "20");
@@ -13,8 +13,8 @@ type Duplicati = {
     Duration: string;
     EndTime: string;
   } | null;
-  Extra:{
-    "backup-name":string;
+  Extra: {
+    "backup-name": string;
   };
 };
 
@@ -115,5 +115,5 @@ server.get("/status", async (request, reply) => {
 });
 
 (async () => {
-    await server.listen({ port: PORT, host: "0.0.0.0" });
+  await server.listen({ port: PORT, host: "0.0.0.0" });
 })();
